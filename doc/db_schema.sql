@@ -1,3 +1,4 @@
+
 -- 启用 UUID 扩展
 create extension if not exists "uuid-ossp";
 
@@ -49,12 +50,22 @@ create table public.appointments (
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
+-- 4. 创建 Logs 表 (新增)
+create table public.logs (
+  id text primary key,
+  action text not null,
+  details text,
+  timestamp bigint not null,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
 -- 设置行级安全策略 (RLS)
 -- 注意：为了演示方便，这里允许公开读写。在生产环境中应配置更严格的 Auth 策略。
 
 alter table public.settings enable row level security;
 alter table public.barbers enable row level security;
 alter table public.appointments enable row level security;
+alter table public.logs enable row level security;
 
 -- Settings 策略
 create policy "Enable read access for all users" on public.settings for select using (true);
@@ -69,3 +80,7 @@ create policy "Enable insert/update for all users" on public.barbers for all usi
 create policy "Enable read access for all users" on public.appointments for select using (true);
 create policy "Enable insert access for all users" on public.appointments for insert with check (true);
 create policy "Enable update access for all users" on public.appointments for update using (true);
+
+-- Logs 策略
+create policy "Enable read access for all users" on public.logs for select using (true);
+create policy "Enable insert access for all users" on public.logs for insert with check (true);

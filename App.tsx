@@ -7,7 +7,7 @@ import { AdminPanel } from './components/AdminPanel';
 import { QRScanner } from './components/QRScanner';
 import { AIAdvisor } from './components/AIAdvisor';
 import { ScheduleDashboard } from './components/ScheduleDashboard';
-import { format } from 'date-fns';
+import { format, differenceInMinutes } from 'date-fns';
 import { 
   Scissors, 
   PlusCircle, 
@@ -22,7 +22,9 @@ import {
   Trash2,
   Clock,
   User,
-  AlertTriangle
+  AlertTriangle,
+  Bell,
+  X
 } from 'lucide-react';
 
 function App() {
@@ -36,12 +38,59 @@ function App() {
   // New state for Scan to Book
   const [preSelectedBarberId, setPreSelectedBarberId] = useState<string | null>(null);
 
+  // Reminder State
+  const [upcomingReminder, setUpcomingReminder] = useState<Appointment | null>(null);
+
   // For generating QR codes in the UI
   const [qrUrls, setQrUrls] = useState<Record<string, string>>({});
 
   useEffect(() => {
     refreshData();
+    // Request notification permission on load
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
   }, [view]);
+
+  // Reminder Check Logic
+  useEffect(() => {
+    const checkReminders = () => {
+      if (appointments.length === 0) return;
+
+      const now = new Date();
+      const activeApps = appointments.filter(a => a.status === AppointmentStatus.BOOKED);
+
+      const imminentApp = activeApps.find(app => {
+        // Construct appointment date object
+        // Date string is YYYY-MM-DD, Time is HH:mm
+        const appDateTimeStr = `${app.date}T${app.timeSlot}:00`;
+        const appDate = new Date(appDateTimeStr);
+        
+        const diffMinutes = differenceInMinutes(appDate, now);
+        
+        // Notify if within 0 to 30 minutes
+        return diffMinutes > 0 && diffMinutes <= 30;
+      });
+
+      if (imminentApp && imminentApp.id !== upcomingReminder?.id) {
+        setUpcomingReminder(imminentApp);
+        
+        // Trigger System Notification
+        if ('Notification' in window && Notification.permission === 'granted') {
+           new Notification("预约提醒", { 
+             body: `您预约的理发服务将在 ${imminentApp.timeSlot} 开始，请及时到店。`,
+             icon: '/favicon.ico' // Assuming favicon exists, or just leave blank
+           });
+        }
+      }
+    };
+
+    // Check immediately and then every minute
+    checkReminders();
+    const timer = setInterval(checkReminders, 60000);
+
+    return () => clearInterval(timer);
+  }, [appointments, upcomingReminder]);
 
   const refreshData = async () => {
     setLoading(true);
@@ -140,6 +189,10 @@ function App() {
       setLoading(true);
       await StorageService.updateAppointmentStatus(id, AppointmentStatus.CANCELLED);
       await refreshData();
+      // If we cancelled the reminded appointment, clear the reminder
+      if (upcomingReminder?.id === id) {
+        setUpcomingReminder(null);
+      }
     }
   };
 
@@ -273,6 +326,27 @@ function App() {
       {/* Main Content */}
       <main className="max-w-4xl mx-auto p-4 min-h-[calc(100vh-64px)]">
         
+        {/* Upcoming Appointment Alert Banner */}
+        {upcomingReminder && (
+           <div className="mb-6 bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3 shadow-sm animate-in fade-in slide-in-from-top-4">
+              <div className="bg-amber-100 p-2 rounded-full text-amber-600">
+                <Bell size={20} className="animate-swing origin-top" />
+              </div>
+              <div className="flex-1">
+                <h4 className="font-bold text-gray-900">预约即将开始</h4>
+                <p className="text-sm text-gray-700 mt-1">
+                   您预约的 <span className="font-bold">{upcomingReminder.timeSlot}</span> 理发服务（理发师：{barbers.find(b => b.id === upcomingReminder.barberId)?.name}）将在30分钟内开始。请准备前往门店。
+                </p>
+              </div>
+              <button 
+                onClick={() => setUpcomingReminder(null)}
+                className="text-gray-400 hover:text-gray-600 p-1"
+              >
+                <X size={20} />
+              </button>
+           </div>
+        )}
+
         {/* Success/Status Modal for Scan */}
         {scanResult && (
           <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">

@@ -1,7 +1,35 @@
+
 import { GoogleGenAI } from "@google/genai";
 
+// Robust environment variable access for various build tools (Vite, CRA, Webpack)
+const getEnvVar = (key: string): string => {
+  // 1. Try explicit VITE_ prefix (Standard for Vite)
+  try {
+    // @ts-ignore
+    if (typeof import.meta !== 'undefined' && import.meta.env) {
+      // @ts-ignore
+      if (import.meta.env[`VITE_${key}`]) return import.meta.env[`VITE_${key}`];
+      // @ts-ignore
+      if (import.meta.env[key]) return import.meta.env[key];
+    }
+  } catch (e) {}
+
+  // 2. Try explicit REACT_APP_ prefix (Standard for CRA)
+  try {
+    if (typeof process !== 'undefined' && process.env) {
+      if (process.env[`REACT_APP_${key}`]) return process.env[`REACT_APP_${key}`];
+      if (process.env[`VITE_${key}`]) return process.env[`VITE_${key}`];
+      if (process.env[key]) return process.env[key];
+    }
+  } catch (e) {}
+
+  return '';
+};
+
 // Ideally, this is injected via build process, but for this demo environment we access it from env
-const API_KEY = process.env.API_KEY || '';
+const API_KEY = getEnvVar('API_KEY');
+// Allow configuring model from Env
+const MODEL_NAME = getEnvVar('GEMINI_MODEL') || 'gemini-3-flash-preview';
 
 let client: GoogleGenAI | null = null;
 
@@ -15,10 +43,9 @@ const getClient = () => {
 export const GeminiService = {
   askStyleAdvice: async (userQuery: string, context?: string) => {
     const ai = getClient();
-    if (!ai) return "API Key 未配置。";
+    if (!ai) return "API Key 未配置。请检查 VITE_API_KEY 或 API_KEY 环境变量。";
 
     try {
-      const model = 'gemini-3-flash-preview';
       const prompt = `
         你是一位专业的发型师和理发顾问。
         用户正在寻求关于发型的建议。
@@ -29,7 +56,7 @@ export const GeminiService = {
       `;
 
       const response = await ai.models.generateContent({
-        model: model,
+        model: MODEL_NAME,
         contents: prompt,
       });
 

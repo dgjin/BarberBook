@@ -1,3 +1,4 @@
+
 export enum AppointmentStatus {
   BOOKED = 'BOOKED',
   COMPLETED = 'COMPLETED',
@@ -30,6 +31,13 @@ export interface SystemSettings {
   openingTime: string; // "09:00"
   closingTime: string; // "18:00"
   slotDurationMinutes: number; // e.g., 30 or 60
+}
+
+export interface LogEntry {
+  id: string;
+  action: string; // e.g., '预约创建', '取消预约', '系统配置'
+  details: string;
+  timestamp: number;
 }
 
 export type ViewState = 'HOME' | 'BOOKING' | 'MY_APPOINTMENTS' | 'ADMIN' | 'AI_ADVISOR' | 'SCANNER';
