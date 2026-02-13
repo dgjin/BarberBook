@@ -1,0 +1,7 @@
+{
+  "name": "BarberBook Pro",
+  "description": "智能理发店预约系统，支持二维码签到和AI发型咨询。",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
