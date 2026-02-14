@@ -4,7 +4,7 @@ import QRCode from 'qrcode';
 import { StorageService } from '../services/storageService';
 import { SystemSettings, Appointment, AppointmentStatus, Barber, LogEntry } from '../types';
 import { DEFAULT_SETTINGS } from '../constants';
-import { Save, Settings as SettingsIcon, Trash2, Loader2, RefreshCw, Database, Link, Users, Plus, Edit2, QrCode, Upload, Activity, Lock } from 'lucide-react';
+import { Settings as SettingsIcon, Trash2, Loader2, RefreshCw, Users, Plus, Edit2, QrCode, Activity } from 'lucide-react';
 import { format } from 'date-fns';
 
 interface AdminPanelProps {}
@@ -16,21 +16,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = () => {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [barbers, setBarbers] = useState<Barber[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [saved, setSaved] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [dbConfig, setDbConfig] = useState({ url: '', key: '' });
-  const [dbStatus, setDbStatus] = useState<'idle' | 'success' | 'error'>('idle');
-  const [isEnvConfigured, setIsEnvConfigured] = useState(false);
   const [editingBarber, setEditingBarber] = useState<Barber | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [viewingBarberQr, setViewingBarberQr] = useState<{barber: Barber, url: string} | null>(null);
 
   useEffect(() => {
     loadData();
-    const usingEnv = StorageService.isUsingEnv();
-    setIsEnvConfigured(usingEnv);
-    const config = StorageService.getConnectionConfig();
-    setDbConfig({ url: config.url || '', key: config.key || '' });
   }, []);
 
   const loadData = async () => {
@@ -54,20 +46,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = () => {
     const newLogs = await StorageService.getLogs();
     setLogs(newLogs);
     setIsSaving(false);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
-  };
-
-  const handleSaveDbConfig = async () => {
-    if (isEnvConfigured) return;
-    try {
-      StorageService.updateConnection(dbConfig.url, dbConfig.key);
-      setDbStatus('success');
-      await loadData();
-      setTimeout(() => setDbStatus('idle'), 3000);
-    } catch (e) {
-      setDbStatus('error');
-    }
   };
 
   const cancelAppointment = async (id: string) => {

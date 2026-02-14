@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import QRCode from 'qrcode'; 
 import { ViewState, Appointment, AppointmentStatus, Barber, SystemSettings, User } from './types';
 import { StorageService } from './services/storageService';
@@ -15,7 +15,6 @@ import { DEFAULT_SETTINGS } from './constants';
 import { 
   Scissors, 
   PlusCircle, 
-  CalendarCheck, 
   Settings, 
   QrCode, 
   CheckCircle,
@@ -27,9 +26,7 @@ import {
   User as UserIcon,
   AlertTriangle,
   Bell,
-  X,
-  ChevronRight,
-  LogIn
+  X
 } from 'lucide-react';
 
 function App() {
@@ -471,6 +468,8 @@ function App() {
                       <ScheduleDashboard 
                         appointments={appointments} 
                         barbers={barbers} 
+                        onRefresh={refreshData}
+                        isRefreshing={isRefreshing}
                       />
                   </div>
                 )}
