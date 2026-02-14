@@ -1,18 +1,21 @@
+
 import React, { useEffect, useState, useMemo } from 'react';
 import { Appointment, AppointmentStatus, Barber, SystemSettings } from '../types';
 import { StorageService } from '../services/storageService';
 import { DEFAULT_SETTINGS } from '../constants';
 import { format, addDays, isSameDay } from 'date-fns';
-import { CalendarDays, User, Clock } from 'lucide-react';
+import { CalendarDays, User, Clock, RefreshCw } from 'lucide-react';
 
 interface ScheduleDashboardProps {
   appointments: Appointment[];
   barbers: Barber[];
+  onRefresh?: () => void;
+  isRefreshing?: boolean;
 }
 
 const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 
-export const ScheduleDashboard: React.FC<ScheduleDashboardProps> = ({ appointments, barbers }) => {
+export const ScheduleDashboard: React.FC<ScheduleDashboardProps> = ({ appointments, barbers, onRefresh, isRefreshing = false }) => {
   const [settings, setSettings] = useState<SystemSettings>(DEFAULT_SETTINGS);
 
   useEffect(() => {
@@ -50,7 +53,8 @@ export const ScheduleDashboard: React.FC<ScheduleDashboardProps> = ({ appointmen
     return appointments.filter(a => 
       a.barberId === barberId && 
       a.date === dateStr && 
-      a.status !== AppointmentStatus.CANCELLED
+      a.status !== AppointmentStatus.CANCELLED &&
+      a.status !== AppointmentStatus.EXPIRED 
     ).length;
   };
 
@@ -61,10 +65,23 @@ export const ScheduleDashboard: React.FC<ScheduleDashboardProps> = ({ appointmen
           <CalendarDays size={20} className="text-brand-600" />
           本周预约看板
         </h3>
-        <div className="flex items-center gap-3 text-xs text-gray-500">
-          <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500"></span> 空闲</div>
-          <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-yellow-500"></span> 繁忙</div>
-          <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500"></span> 已满</div>
+        <div className="flex items-center gap-4">
+            {/* Legend for status colors */}
+            <div className="hidden sm:flex items-center gap-3 text-xs text-gray-500">
+                <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500"></span> 空闲</div>
+                <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-yellow-500"></span> 繁忙</div>
+                <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500 opacity-60"></span> 已满</div>
+            </div>
+            {onRefresh && (
+                <button 
+                    onClick={onRefresh} 
+                    disabled={isRefreshing}
+                    className={`p-1.5 rounded-full hover:bg-gray-100 text-gray-500 transition-colors ${isRefreshing ? 'animate-spin' : ''}`}
+                    title="刷新数据"
+                >
+                    <RefreshCw size={16} />
+                </button>
+            )}
         </div>
       </div>
       
@@ -105,12 +122,15 @@ export const ScheduleDashboard: React.FC<ScheduleDashboardProps> = ({ appointmen
                 {next7Days.map(date => {
                   const booked = getBookedCount(barber.id, date);
                   const isFull = booked >= maxDailyCapacity;
-                  const isBusy = booked >= maxDailyCapacity * 0.7;
-                  const available = Math.max(0, maxDailyCapacity - booked);
-
+                  const isBusy = booked >= maxDailyCapacity * 0.7; // > 70% capacity
+                  
+                  // Style logic
                   let colorClass = "bg-green-50 text-green-700 border-green-100";
-                  if (isFull) colorClass = "bg-red-50 text-red-700 border-red-100 opacity-60";
-                  else if (isBusy) colorClass = "bg-yellow-50 text-yellow-700 border-yellow-100";
+                  if (isFull) {
+                      colorClass = "bg-red-50 text-red-700 border-red-100 opacity-60";
+                  } else if (isBusy) {
+                      colorClass = "bg-yellow-50 text-yellow-700 border-yellow-100";
+                  }
 
                   return (
                     <td key={date.toISOString()} className="p-2 border-b border-gray-50 text-center">

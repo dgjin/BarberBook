@@ -1,13 +1,17 @@
+
 import React, { useState, useEffect } from 'react';
-import QRCode from 'qrcode'; // Standard import
-import { ViewState, Appointment, AppointmentStatus, Barber } from './types';
+import QRCode from 'qrcode'; 
+import { ViewState, Appointment, AppointmentStatus, Barber, SystemSettings, User } from './types';
 import { StorageService } from './services/storageService';
 import { BookingFlow } from './components/BookingFlow';
 import { AdminPanel } from './components/AdminPanel';
 import { QRScanner } from './components/QRScanner';
 import { AIAdvisor } from './components/AIAdvisor';
+import { Auth } from './components/Auth';
 import { ScheduleDashboard } from './components/ScheduleDashboard';
+import { UserProfile } from './components/UserProfile';
 import { format, differenceInMinutes } from 'date-fns';
+import { DEFAULT_SETTINGS } from './constants';
 import { 
   Scissors, 
   PlusCircle, 
@@ -16,167 +20,203 @@ import {
   QrCode, 
   CheckCircle,
   Home,
-  LogOut,
   Sparkles,
   Loader2,
   Trash2,
   Clock,
-  User,
+  User as UserIcon,
   AlertTriangle,
   Bell,
-  X
+  X,
+  ChevronRight,
+  LogIn
 } from 'lucide-react';
 
 function App() {
   const [view, setView] = useState<ViewState>('HOME');
   const [loading, setLoading] = useState(true);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [barbers, setBarbers] = useState<Barber[]>([]);
-  // Enhanced scan result state to include specific messages
-  const [scanResult, setScanResult] = useState<{app: Appointment, success: boolean, message?: string} | null>(null);
+  const [settings, setSettings] = useState<SystemSettings>(DEFAULT_SETTINGS);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   
-  // New state for Scan to Book
+  const [scanResult, setScanResult] = useState<{app: Appointment, success: boolean, message?: string} | null>(null);
   const [preSelectedBarberId, setPreSelectedBarberId] = useState<string | null>(null);
-
-  // Reminder State
   const [upcomingReminder, setUpcomingReminder] = useState<Appointment | null>(null);
-
-  // For generating QR codes in the UI
+  const [authLoading, setAuthLoading] = useState(false);
   const [qrUrls, setQrUrls] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    refreshData();
-    // Request notification permission on load
+    const init = async () => {
+        setLoading(true);
+        try {
+            const urlParams = new URLSearchParams(window.location.search);
+            const wechatCode = urlParams.get('code');
+            
+            if (wechatCode) {
+                setAuthLoading(true);
+                window.history.replaceState({}, document.title, window.location.pathname);
+                const result = await StorageService.loginWithWeChatCode(wechatCode);
+                if (result.success && result.user) {
+                    setCurrentUser(result.user);
+                    setView('HOME');
+                } else {
+                    alert('微信登录失败: ' + result.message);
+                }
+                setAuthLoading(false);
+            } else {
+                const user = StorageService.getCurrentUser();
+                setCurrentUser(user);
+            }
+            
+            const s = await StorageService.getSettings();
+            setSettings(s);
+            await refreshData();
+        } catch(e) { console.error(e); }
+        setLoading(false);
+    };
+    init();
+
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission();
     }
-  }, [view]);
+  }, []); 
 
-  // Reminder Check Logic
   useEffect(() => {
-    const checkReminders = () => {
+    const runChecks = async () => {
+      await refreshData();
       if (appointments.length === 0) return;
 
       const now = new Date();
       const activeApps = appointments.filter(a => a.status === AppointmentStatus.BOOKED);
+      const duration = settings.slotDurationMinutes || 45;
 
-      const imminentApp = activeApps.find(app => {
-        // Construct appointment date object
-        // Date string is YYYY-MM-DD, Time is HH:mm
-        const appDateTimeStr = `${app.date}T${app.timeSlot}:00`;
-        const appDate = new Date(appDateTimeStr);
-        
-        const diffMinutes = differenceInMinutes(appDate, now);
-        
-        // Notify if within 0 to 30 minutes
-        return diffMinutes > 0 && diffMinutes <= 30;
-      });
+      for (const app of activeApps) {
+         try {
+             const appDateTimeStr = `${app.date}T${app.timeSlot}:00`;
+             const appStartTime = new Date(appDateTimeStr);
+             const appEndTime = new Date(appStartTime.getTime() + duration * 60 * 1000);
 
-      if (imminentApp && imminentApp.id !== upcomingReminder?.id) {
-        setUpcomingReminder(imminentApp);
-        
-        // Trigger System Notification
-        if ('Notification' in window && Notification.permission === 'granted') {
-           new Notification("预约提醒", { 
-             body: `您预约的理发服务将在 ${imminentApp.timeSlot} 开始，请及时到店。`,
-             icon: '/favicon.ico' // Assuming favicon exists, or just leave blank
-           });
-        }
+             if (now > appEndTime) {
+                 await StorageService.updateAppointmentStatus(app.id, AppointmentStatus.EXPIRED);
+             }
+         } catch (e) {
+             console.error("Expiration check error", e);
+         }
+      }
+
+      if (currentUser) {
+          const myActiveApps = activeApps.filter(a => a.userId === currentUser.id);
+          const imminentApp = myActiveApps.find(app => {
+            const appDateTimeStr = `${app.date}T${app.timeSlot}:00`;
+            const appDate = new Date(appDateTimeStr);
+            const diffMinutes = differenceInMinutes(appDate, now);
+            return diffMinutes > 0 && diffMinutes <= 30;
+          });
+
+          if (imminentApp && imminentApp.id !== upcomingReminder?.id) {
+            setUpcomingReminder(imminentApp);
+            if ('Notification' in window && Notification.permission === 'granted') {
+               new Notification("预约提醒", { 
+                 body: `您预约的理发服务将在 ${imminentApp.timeSlot} 开始，请及时到店。`,
+                 icon: '/favicon.ico' 
+               });
+            }
+          }
       }
     };
 
-    // Check immediately and then every minute
-    checkReminders();
-    const timer = setInterval(checkReminders, 60000);
-
+    const timer = setInterval(runChecks, 30000);
     return () => clearInterval(timer);
-  }, [appointments, upcomingReminder]);
+  }, [settings, currentUser]); 
 
   const refreshData = async () => {
-    setLoading(true);
+    setIsRefreshing(true);
     try {
       const [apps, barberList] = await Promise.all([
         StorageService.getAppointments(),
         StorageService.getBarbers()
       ]);
-      
-      // Sort by date/time (simple string sort works for ISO dates and HH:mm)
       apps.sort((a, b) => (a.date + a.timeSlot).localeCompare(b.date + b.timeSlot));
       setAppointments(apps);
       setBarbers(barberList);
 
-      // Generate QRs for booked apps
       const newQrUrls = { ...qrUrls };
-      for (const app of apps) {
+      const relevantApps = currentUser ? apps.filter(a => a.userId === currentUser.id) : [];
+      for (const app of relevantApps) {
         if (app.status === AppointmentStatus.BOOKED && !newQrUrls[app.id]) {
           try {
             newQrUrls[app.id] = await QRCode.toDataURL(app.id);
-          } catch (err) {
-            console.error(err);
-          }
+          } catch (err) {}
         }
       }
       setQrUrls(newQrUrls);
     } catch (e) {
       console.error("Failed to refresh data", e);
     } finally {
-      setLoading(false);
+      setIsRefreshing(false);
     }
   };
 
+  const handleLoginSuccess = () => {
+      const user = StorageService.getCurrentUser();
+      setCurrentUser(user);
+      setView('HOME');
+  };
+
+  const handleUserUpdate = () => {
+      const user = StorageService.getCurrentUser();
+      setCurrentUser(user);
+  };
+
+  const handleLogout = () => {
+      StorageService.logout();
+      setCurrentUser(null);
+      setView('LOGIN');
+  };
+
+  const navigateTo = (target: ViewState) => {
+      if (target === 'ADMIN') {
+          if (!currentUser) { setView('LOGIN'); return; }
+          if (currentUser.role !== 'ADMIN') { alert("无权限"); return; }
+      }
+      if ((target === 'BOOKING' || target === 'MY_APPOINTMENTS' || target === 'PROFILE') && !currentUser) {
+          setView('LOGIN'); return;
+      }
+      setPreSelectedBarberId(null);
+      setView(target);
+  };
+
   const handleScanSuccess = async (scannedApp: Appointment) => {
-    // Need to verify status freshly from DB to avoid stale closures
     const currentApps = await StorageService.getAppointments();
     const app = currentApps.find(a => a.id === scannedApp.id) || scannedApp;
 
-    // 1. Check basic status
     if (app.status !== AppointmentStatus.BOOKED) {
-      setScanResult({ 
-          app, 
-          success: false, 
-          message: `该预约状态为 ${getStatusText(app.status)}，无法签到。` 
-      }); 
+      setScanResult({ app, success: false, message: `该预约状态为 ${getStatusText(app.status)}，无法签到。` }); 
       return;
     }
 
-    // 2. Queue Logic Check:
-    // Ensure no earlier BOOKED appointments exist for this barber on this day.
     const todayStr = format(new Date(), 'yyyy-MM-dd');
     if (app.date === todayStr) {
         const unfinishedPriorApps = currentApps.filter(a => 
-            a.barberId === app.barberId &&
-            a.date === app.date &&
-            a.status === AppointmentStatus.BOOKED &&
-            a.timeSlot < app.timeSlot // Compare time strings "09:00" < "10:00"
+            a.barberId === app.barberId && a.date === app.date && a.status === AppointmentStatus.BOOKED && a.timeSlot < app.timeSlot
         );
-
         if (unfinishedPriorApps.length > 0) {
-            setScanResult({ 
-                app, 
-                success: false, 
-                message: `无法签到！前方还有 ${unfinishedPriorApps.length} 位预约顾客（${unfinishedPriorApps[0].timeSlot}等）未完成理发。请按顺序排队。` 
-            }); 
+            setScanResult({ app, success: false, message: `前方还有 ${unfinishedPriorApps.length} 位预约顾客未完成，请排队。` }); 
             return;
         }
     }
 
-    // 3. Process Check-in
     const success = await StorageService.updateAppointmentStatus(app.id, AppointmentStatus.COMPLETED);
     if (success) {
-      setScanResult({ 
-          app, 
-          success: true,
-          message: `签到成功！${app.timeSlot} 的服务现在开始。`
-      });
-      refreshData(); // Refresh list
+      setScanResult({ app, success: true, message: `签到成功！${app.timeSlot} 服务开始。` });
+      refreshData();
     } else {
-       setScanResult({ 
-           app, 
-           success: false,
-           message: "系统更新失败，请重试。" 
-       }); 
+       setScanResult({ app, success: false, message: "系统更新失败。" }); 
     }
-    setView('HOME'); // Return to home but show modal
+    setView('HOME');
   };
 
   const handleScanBooking = (barberId: string) => {
@@ -185,317 +225,316 @@ function App() {
   };
 
   const handleCancelAppointment = async (id: string) => {
-    if (confirm('确定要取消这个预约吗？取消后该时间段将立即释放给其他客户。')) {
+    if (confirm('确定要取消预约吗？')) {
       setLoading(true);
       await StorageService.updateAppointmentStatus(id, AppointmentStatus.CANCELLED);
       await refreshData();
-      // If we cancelled the reminded appointment, clear the reminder
-      if (upcomingReminder?.id === id) {
-        setUpcomingReminder(null);
-      }
+      setLoading(false);
+      if (upcomingReminder?.id === id) setUpcomingReminder(null);
     }
   };
 
-  const activeAppointments = appointments.filter(a => a.status === AppointmentStatus.BOOKED);
-
-  const NavbarItem = ({ icon: Icon, label, target }: { icon: any, label: string, target: ViewState }) => (
-    <button
-      onClick={() => { setView(target); setPreSelectedBarberId(null); }}
-      className={`flex flex-col items-center p-2 text-xs font-medium transition-colors ${
-        view === target ? 'text-brand-600' : 'text-gray-400 hover:text-gray-600'
-      }`}
-    >
-      <Icon size={24} className="mb-1" />
-      {label}
-    </button>
-  );
+  const activeAppointments = appointments.filter(a => a.status === AppointmentStatus.BOOKED && a.userId === currentUser?.id);
 
   const getStatusText = (status: AppointmentStatus) => {
      switch(status) {
          case AppointmentStatus.BOOKED: return '已预约';
          case AppointmentStatus.COMPLETED: return '已完成';
          case AppointmentStatus.CANCELLED: return '已取消';
+         case AppointmentStatus.EXPIRED: return '已过期';
          default: return status;
      }
   };
 
-  // Helper to render Today's Queue
+  // --- Components ---
+
   const TodayQueueDashboard = () => {
     const todayStr = format(new Date(), 'yyyy-MM-dd');
-
     return (
-        <div className="mt-8">
-            <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2 mb-4">
-                <Clock className="text-brand-600" />
-                今日排队动态 <span className="text-sm font-normal text-gray-500">({todayStr})</span>
+        <div className="mt-6">
+            <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2 mb-3">
+                <Clock size={18} className="text-brand-600" />
+                今日动态
             </h2>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="flex flex-nowrap overflow-x-auto gap-4 pb-2 -mx-4 px-4 scrollbar-hide">
                 {barbers.map(barber => {
                     const dailyApps = appointments
-                        .filter(a => a.barberId === barber.id && a.date === todayStr && a.status !== AppointmentStatus.CANCELLED)
+                        .filter(a => a.barberId === barber.id && a.date === todayStr && a.status !== AppointmentStatus.CANCELLED && a.status !== AppointmentStatus.EXPIRED)
                         .sort((a, b) => a.timeSlot.localeCompare(b.timeSlot));
-                    
-                    if (dailyApps.length === 0) return null;
-
-                    // Find the next person to serve (first BOOKED)
                     const nextUpIndex = dailyApps.findIndex(a => a.status === AppointmentStatus.BOOKED);
 
                     return (
-                        <div key={barber.id} className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
-                            <div className="flex items-center gap-3 mb-3 border-b border-gray-100 pb-2">
+                        <div key={barber.id} className="flex-shrink-0 w-64 bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
+                            <div className="flex items-center gap-3 mb-3 border-b border-gray-50 pb-2">
                                 <img src={barber.avatarUrl} alt={barber.name} className="w-10 h-10 rounded-full object-cover" />
-                                <div>
-                                    <h3 className="font-bold text-gray-800">{barber.name}</h3>
-                                    <p className="text-xs text-gray-500">今日预约: {dailyApps.length} 人</p>
+                                <div className="min-w-0">
+                                    <h3 className="font-bold text-gray-800 truncate">{barber.name}</h3>
+                                    <p className="text-xs text-gray-500">排队: {dailyApps.length} 人</p>
                                 </div>
                             </div>
-                            
-                            <div className="flex flex-wrap gap-2">
-                                {dailyApps.map((app, index) => {
-                                    const isCompleted = app.status === AppointmentStatus.COMPLETED;
-                                    const isNext = index === nextUpIndex;
-                                    
-                                    return (
-                                        <div 
-                                            key={app.id}
-                                            className={`
-                                                relative p-2 rounded-lg text-xs font-medium border flex flex-col items-center justify-center gap-0.5 min-w-[70px]
-                                                ${isCompleted 
-                                                    ? 'bg-green-50 text-green-700 border-green-200' 
-                                                    : isNext 
-                                                        ? 'bg-brand-600 text-white border-brand-600 shadow-md ring-2 ring-brand-100' 
-                                                        : 'bg-gray-50 text-gray-400 border-gray-200'}
-                                            `}
-                                        >
-                                            <div className="flex items-center gap-1">
-                                              {isCompleted && <CheckCircle size={10} />}
-                                              {isNext && <span className="animate-pulse w-1.5 h-1.5 bg-white rounded-full"></span>}
-                                              <span className="font-bold">{app.timeSlot}</span>
+                            <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+                                {dailyApps.length === 0 ? <span className="text-xs text-gray-400">暂无预约</span> : 
+                                    dailyApps.map((app, index) => {
+                                        const isCompleted = app.status === AppointmentStatus.COMPLETED;
+                                        const isNext = index === nextUpIndex;
+                                        return (
+                                            <div key={app.id} className={`flex-shrink-0 w-14 h-14 flex flex-col items-center justify-center rounded-lg border text-[10px] ${
+                                                isCompleted ? 'bg-green-50 border-green-200 text-green-700' : 
+                                                isNext ? 'bg-brand-600 border-brand-600 text-white' : 'bg-gray-50 border-gray-200 text-gray-400'
+                                            }`}>
+                                                <span className="font-bold text-xs">{app.timeSlot}</span>
+                                                <span className="truncate w-full text-center px-1">{app.customerName}</span>
                                             </div>
-                                            <span className={`truncate max-w-[60px] text-[10px] ${isNext ? 'text-brand-100' : 'text-gray-500'}`}>
-                                              {app.customerName || '顾客'}
-                                            </span>
-                                            {isNext && <div className="absolute -top-2 -right-2 bg-red-500 text-white text-[9px] px-1 rounded-full z-10">当前</div>}
-                                        </div>
-                                    );
-                                })}
+                                        );
+                                    })
+                                }
                             </div>
-                            {nextUpIndex === -1 && dailyApps.length > 0 && (
-                                <p className="text-xs text-green-600 mt-2 flex items-center gap-1">
-                                    <CheckCircle size={12} /> 今日预约已全部完成
-                                </p>
-                            )}
-                             {nextUpIndex === -1 && dailyApps.length === 0 && (
-                                <p className="text-xs text-gray-400 mt-2">今日暂无预约</p>
-                            )}
                         </div>
                     );
                 })}
-                {barbers.length === 0 && <div className="text-gray-400 text-sm">暂无理发师数据。</div>}
             </div>
         </div>
     );
   };
 
-  return (
-    <div className="min-h-screen bg-gray-50 pb-20 md:pb-0">
-      {/* Header */}
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
-        <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-brand-600" onClick={() => setView('HOME')}>
-            <Scissors className="transform -scale-x-100" />
-            <span className="text-xl font-bold tracking-tight">BarberBook</span>
-          </div>
-          <div className="hidden md:flex items-center gap-6">
-            <button onClick={() => setView('HOME')} className={`text-sm font-medium ${view === 'HOME' ? 'text-brand-600' : 'text-gray-500 hover:text-gray-900'}`}>主页</button>
-            <button onClick={() => { setView('BOOKING'); setPreSelectedBarberId(null); }} className={`text-sm font-medium ${view === 'BOOKING' ? 'text-brand-600' : 'text-gray-500 hover:text-gray-900'}`}>立即预约</button>
-            <button onClick={() => setView('AI_ADVISOR')} className={`text-sm font-medium ${view === 'AI_ADVISOR' ? 'text-indigo-600' : 'text-gray-500 hover:text-indigo-600'}`}>AI 顾问</button>
-            <button onClick={() => setView('ADMIN')} className={`text-sm font-medium ${view === 'ADMIN' ? 'text-brand-600' : 'text-gray-500 hover:text-gray-900'}`}>管理后台</button>
-          </div>
-          <button 
-            onClick={() => setView('SCANNER')}
-            className="flex items-center gap-2 bg-gray-900 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-black transition-colors"
-          >
-            <QrCode size={18} />
-            <span className="hidden sm:inline">扫码预约/签到</span>
-          </button>
-        </div>
-      </header>
+  const MobileHeader = () => {
+    let title = "BarberBook";
+    if (view === 'BOOKING') title = "立即预约";
+    if (view === 'PROFILE') title = "个人中心";
+    if (view === 'AI_ADVISOR') title = "AI 顾问";
+    if (view === 'ADMIN') title = "管理后台";
 
-      {/* Main Content */}
-      <main className="max-w-4xl mx-auto p-4 min-h-[calc(100vh-64px)]">
+    return (
+        <div className="bg-white/80 backdrop-blur-md sticky top-0 z-20 pt-safe border-b border-gray-200 transition-all">
+            <div className="h-12 px-4 flex items-center justify-between">
+                {view === 'HOME' ? (
+                   <div className="flex items-center gap-2 text-brand-600">
+                     <Scissors className="transform -scale-x-100" size={20} />
+                     <span className="text-lg font-bold tracking-tight">BarberBook</span>
+                   </div>
+                ) : (
+                   <h1 className="text-lg font-bold text-gray-900 absolute left-1/2 transform -translate-x-1/2">{title}</h1>
+                )}
+                
+                {/* Right Action */}
+                <div className="flex items-center gap-3">
+                   {view === 'HOME' && (
+                       <button onClick={() => setView('SCANNER')} className="p-2 bg-gray-100 rounded-full text-gray-700">
+                           <QrCode size={18} />
+                       </button>
+                   )}
+                   {view !== 'HOME' && view !== 'LOGIN' && (
+                       <button onClick={() => setView('HOME')} className="text-sm font-medium text-brand-600">
+                           完成
+                       </button>
+                   )}
+                </div>
+            </div>
+        </div>
+    );
+  };
+
+  const BottomTab = () => {
+      // Hide bottom tab on Login, Scanner, or deep Booking flow
+      if (view === 'LOGIN' || view === 'SCANNER') return null;
+
+      const items = [
+          { id: 'HOME', label: '首页', icon: Home },
+          { id: 'BOOKING', label: '预约', icon: PlusCircle },
+          { id: 'AI_ADVISOR', label: '顾问', icon: Sparkles },
+          { id: 'PROFILE', label: currentUser ? '我的' : '登录', icon: currentUser?.role === 'ADMIN' ? Settings : UserIcon, target: currentUser?.role === 'ADMIN' ? 'ADMIN' : 'PROFILE' }
+      ];
+
+      return (
+          <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 pb-safe z-30">
+              <div className="h-14 flex items-center justify-around">
+                  {items.map(item => {
+                      const isActive = view === item.id || (item.target && view === item.target);
+                      return (
+                          <button 
+                            key={item.id}
+                            onClick={() => navigateTo((item.target || item.id) as ViewState)}
+                            className={`flex flex-col items-center justify-center w-full h-full space-y-0.5 ${isActive ? 'text-brand-600' : 'text-gray-400'}`}
+                          >
+                              <item.icon size={22} strokeWidth={isActive ? 2.5 : 2} />
+                              <span className="text-[10px] font-medium">{item.label}</span>
+                          </button>
+                      );
+                  })}
+              </div>
+          </div>
+      );
+  };
+
+  if (authLoading) {
+      return (
+          <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50">
+              <Loader2 className="w-10 h-10 text-brand-600 animate-spin mb-4" />
+              <p className="text-sm text-gray-500">正在同步数据...</p>
+          </div>
+      );
+  }
+
+  return (
+    <div className="h-screen w-full flex flex-col bg-gray-50 text-gray-900 font-sans overflow-hidden">
+      
+      {/* Dynamic Header */}
+      {view !== 'SCANNER' && <MobileHeader />}
+
+      {/* Main Scrollable Content */}
+      <main className={`flex-1 overflow-y-auto overflow-x-hidden scrollbar-hide ${view !== 'SCANNER' && view !== 'LOGIN' ? 'pb-20' : ''}`}>
         
-        {/* Upcoming Appointment Alert Banner */}
-        {upcomingReminder && (
-           <div className="mb-6 bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3 shadow-sm animate-in fade-in slide-in-from-top-4">
-              <div className="bg-amber-100 p-2 rounded-full text-amber-600">
-                <Bell size={20} className="animate-swing origin-top" />
+        {/* Banner for Reminders */}
+        {upcomingReminder && view === 'HOME' && (
+           <div className="mx-4 mt-4 bg-amber-50 border border-amber-100 rounded-xl p-3 flex items-start gap-3 shadow-sm">
+              <div className="bg-amber-100 p-1.5 rounded-full text-amber-600 mt-0.5">
+                <Bell size={16} className="animate-swing origin-top" />
               </div>
               <div className="flex-1">
-                <h4 className="font-bold text-gray-900">预约即将开始</h4>
-                <p className="text-sm text-gray-700 mt-1">
-                   您预约的 <span className="font-bold">{upcomingReminder.timeSlot}</span> 理发服务（理发师：{barbers.find(b => b.id === upcomingReminder.barberId)?.name}）将在30分钟内开始。请准备前往门店。
+                <h4 className="font-bold text-sm text-gray-900">预约即将开始</h4>
+                <p className="text-xs text-gray-600 mt-0.5">
+                   {upcomingReminder.timeSlot} 的服务将在30分钟内开始。
                 </p>
               </div>
-              <button 
-                onClick={() => setUpcomingReminder(null)}
-                className="text-gray-400 hover:text-gray-600 p-1"
-              >
-                <X size={20} />
-              </button>
+              <button onClick={() => setUpcomingReminder(null)} className="text-gray-400 p-1"><X size={16} /></button>
            </div>
         )}
 
-        {/* Success/Status Modal for Scan */}
+        {/* Scan Result Modal */}
         {scanResult && (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl animate-in zoom-in duration-200">
+          <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-6 animate-in fade-in">
+            <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl text-center">
               <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 ${
                 scanResult.success ? 'bg-green-100 text-green-600' : 'bg-orange-100 text-orange-600'
               }`}>
                 {scanResult.success ? <CheckCircle size={32} /> : <AlertTriangle size={32} />}
               </div>
-              <h3 className="text-xl font-bold text-center text-gray-900 mb-2">
-                {scanResult.success ? '签到成功！' : '操作受阻'}
-              </h3>
-              <p className="text-center text-gray-500 mb-6 text-sm">
-                {scanResult.message || (scanResult.success 
-                  ? `已成功签到 ${scanResult.app.timeSlot} 的预约。资源已释放。` 
-                  : `此预约当前状态为：${getStatusText(scanResult.app.status)}。`)}
-              </p>
+              <h3 className="text-lg font-bold text-gray-900 mb-2">{scanResult.success ? '签到成功' : '操作受阻'}</h3>
+              <p className="text-gray-500 mb-6 text-sm leading-relaxed">{scanResult.message}</p>
               <button 
                 onClick={() => setScanResult(null)}
-                className="w-full py-3 bg-gray-900 text-white rounded-lg font-bold hover:bg-black"
+                className="w-full py-3.5 bg-gray-900 text-white rounded-xl font-bold active:scale-95 transition-transform"
               >
-                关闭
+                我知道了
               </button>
             </div>
           </div>
         )}
 
-        {/* Dashboard View */}
-        {view === 'HOME' && (
-          <div className="space-y-6">
-            
-            {/* Quick Actions Grid */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div 
-                onClick={() => { setPreSelectedBarberId(null); setView('BOOKING'); }}
-                className="bg-gradient-to-br from-brand-500 to-brand-600 p-6 rounded-2xl text-white shadow-lg shadow-brand-200 cursor-pointer hover:scale-[1.02] transition-transform"
-              >
-                <PlusCircle size={32} className="mb-4 opacity-80" />
-                <h3 className="font-bold text-lg">新预约</h3>
-                <p className="text-brand-100 text-sm">预约理发</p>
-              </div>
-              
-              <div 
-                onClick={() => setView('AI_ADVISOR')}
-                className="bg-gradient-to-br from-indigo-500 to-indigo-600 p-6 rounded-2xl text-white shadow-lg shadow-indigo-200 cursor-pointer hover:scale-[1.02] transition-transform"
-              >
-                <Sparkles size={32} className="mb-4 opacity-80" />
-                <h3 className="font-bold text-lg">发型顾问</h3>
-                <p className="text-indigo-100 text-sm">询问 AI 建议</p>
-              </div>
-            </div>
+        {/* Views */}
+        <div className="p-4 md:max-w-xl md:mx-auto min-h-full">
+            {view === 'LOGIN' && <Auth onLoginSuccess={handleLoginSuccess} />}
 
-            {/* Today's Queue Dashboard (NEW) */}
-            {!loading && <TodayQueueDashboard />}
-
-            {/* Weekly Schedule Dashboard */}
-            {!loading && barbers.length > 0 && (
-              <ScheduleDashboard appointments={appointments} barbers={barbers} />
+            {view === 'PROFILE' && currentUser && (
+                <UserProfile 
+                    currentUser={currentUser}
+                    appointments={appointments}
+                    barbers={barbers}
+                    onLogout={handleLogout}
+                    onUserUpdate={handleUserUpdate}
+                />
             )}
 
-            <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2 mt-8">
-              <CalendarCheck className="text-brand-600" />
-              我的当前预约
-            </h2>
+            {view === 'HOME' && (
+              <div className="space-y-6">
+                {/* Greeting */}
+                <div className="flex justify-between items-center">
+                    <div>
+                        <h2 className="text-2xl font-bold text-gray-900">
+                            {currentUser ? `Hi, ${currentUser.name}` : '欢迎光临'}
+                        </h2>
+                        <p className="text-sm text-gray-500">今天想换个什么造型？</p>
+                    </div>
+                    {currentUser?.avatarUrl && (
+                        <img src={currentUser.avatarUrl} className="w-10 h-10 rounded-full border border-gray-100" />
+                    )}
+                </div>
 
-            {loading ? (
-              <div className="flex justify-center p-8">
-                <Loader2 className="animate-spin text-brand-500" size={32} />
-              </div>
-            ) : activeAppointments.length === 0 ? (
-              <div className="bg-white border-2 border-dashed border-gray-200 rounded-xl p-8 text-center">
-                <p className="text-gray-400">暂无即将到来的预约。</p>
-                <button onClick={() => { setPreSelectedBarberId(null); setView('BOOKING'); }} className="mt-2 text-brand-600 font-medium hover:underline">立即预约</button>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {activeAppointments.map(app => (
-                  <div key={app.id} className="bg-white rounded-xl p-4 shadow-sm border border-gray-100 flex flex-col sm:flex-row gap-4">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-2">
-                        <span className="bg-brand-100 text-brand-700 px-2 py-1 rounded text-xs font-bold uppercase tracking-wider">
-                          即将到来
-                        </span>
-                        <span className="text-sm text-gray-400">ID: {app.id.slice(0, 6)}...</span>
-                      </div>
-                      <h3 className="text-lg font-bold text-gray-900">
-                        {barbers.find(b => b.id === app.barberId)?.name || '未知理发师'}
-                      </h3>
-                      <p className="text-gray-600 flex items-center gap-2 mt-1">
-                        <span className="font-medium">{app.date}</span> 时间：<span className="font-medium">{app.timeSlot}</span>
-                      </p>
-                      
-                      <div className="mt-4 flex flex-wrap gap-2 items-center justify-between">
-                         <p className="text-xs text-gray-400">请在柜台出示二维码签到。</p>
-                         <button 
-                            onClick={() => handleCancelAppointment(app.id)}
-                            className="flex items-center gap-1 px-3 py-1.5 text-xs text-red-600 bg-red-50 hover:bg-red-100 rounded-md border border-red-200 transition-colors"
-                         >
-                            <Trash2 size={12} />
-                            取消预约
-                         </button>
-                      </div>
-                    </div>
-                    <div className="flex items-center justify-center bg-gray-50 p-2 rounded-lg border border-gray-100">
-                      {qrUrls[app.id] ? (
-                        <img src={qrUrls[app.id]} alt="QR Code" className="w-24 h-24 mix-blend-multiply" />
-                      ) : (
-                        <div className="w-24 h-24 bg-gray-200 animate-pulse rounded" />
-                      )}
-                    </div>
+                {/* Quick Actions Cards */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div onClick={() => navigateTo('BOOKING')} className="bg-brand-600 p-4 rounded-2xl text-white shadow-lg shadow-brand-200 active:scale-95 transition-transform">
+                    <PlusCircle size={28} className="mb-8 opacity-90" />
+                    <h3 className="font-bold">立即预约</h3>
+                    <p className="text-brand-100 text-xs mt-1">无需排队</p>
                   </div>
-                ))}
+                  <div onClick={() => setView('AI_ADVISOR')} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm active:scale-95 transition-transform">
+                    <Sparkles size={28} className="mb-8 text-indigo-500" />
+                    <h3 className="font-bold text-gray-900">AI 顾问</h3>
+                    <p className="text-gray-400 text-xs mt-1">发型建议</p>
+                  </div>
+                </div>
+
+                {!loading && <TodayQueueDashboard />}
+                
+                {!loading && barbers.length > 0 && (
+                  <div className="mt-4">
+                      <ScheduleDashboard 
+                        appointments={appointments} 
+                        barbers={barbers} 
+                      />
+                  </div>
+                )}
+
+                {/* My Upcoming Appointments Card (Mobile Style) */}
+                {currentUser && activeAppointments.length > 0 && (
+                    <div className="mt-4">
+                        <div className="flex items-center justify-between mb-3">
+                            <h2 className="text-lg font-bold text-gray-800">我的预约</h2>
+                            <span className="text-xs text-brand-600 font-bold bg-brand-50 px-2 py-1 rounded-full">{activeAppointments.length}</span>
+                        </div>
+                        <div className="space-y-3">
+                            {activeAppointments.map(app => (
+                                <div key={app.id} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center justify-between">
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-12 h-12 rounded-xl bg-gray-100 flex flex-col items-center justify-center text-gray-600">
+                                            <span className="text-xs font-bold">{app.date.slice(5)}</span>
+                                            <span className="text-sm font-bold text-gray-900">{app.timeSlot}</span>
+                                        </div>
+                                        <div>
+                                            <h3 className="font-bold text-gray-900">{barbers.find(b => b.id === app.barberId)?.name}</h3>
+                                            <p className="text-xs text-gray-400">ID: {app.id.slice(0, 4)}</p>
+                                        </div>
+                                    </div>
+                                    <button 
+                                        onClick={() => handleCancelAppointment(app.id)}
+                                        className="w-8 h-8 flex items-center justify-center rounded-full bg-red-50 text-red-500"
+                                    >
+                                        <Trash2 size={16} />
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
               </div>
             )}
-          </div>
-        )}
 
-        {view === 'BOOKING' && (
-          <BookingFlow 
-            onComplete={() => { setView('HOME'); setPreSelectedBarberId(null); }}
-            onCancel={() => { setView('HOME'); setPreSelectedBarberId(null); }}
-            preSelectedBarberId={preSelectedBarberId}
-          />
-        )}
+            {view === 'BOOKING' && (
+              <BookingFlow 
+                currentUser={currentUser}
+                onComplete={() => { setView('HOME'); setPreSelectedBarberId(null); }}
+                onCancel={() => { setView('HOME'); setPreSelectedBarberId(null); }}
+                preSelectedBarberId={preSelectedBarberId}
+              />
+            )}
 
-        {view === 'SCANNER' && (
-          <QRScanner 
-            onScanSuccess={handleScanSuccess}
-            onScanBooking={handleScanBooking}
-            onClose={() => setView('HOME')}
-          />
-        )}
+            {view === 'SCANNER' && (
+              <QRScanner 
+                onScanSuccess={handleScanSuccess}
+                onScanBooking={handleScanBooking}
+                onClose={() => setView('HOME')}
+              />
+            )}
 
-        {/* Admin Logic - No Login Required */}
-        {view === 'ADMIN' && (
-           <AdminPanel />
-        )}
-        
-        {view === 'AI_ADVISOR' && <AIAdvisor />}
-
+            {view === 'ADMIN' && currentUser?.role === 'ADMIN' && (
+               <AdminPanel />
+            )}
+            
+            {view === 'AI_ADVISOR' && <AIAdvisor />}
+        </div>
       </main>
 
-      {/* Mobile Bottom Nav */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 flex md:hidden justify-around pb-safe pt-1">
-        <NavbarItem icon={Home} label="主页" target="HOME" />
-        <NavbarItem icon={PlusCircle} label="预约" target="BOOKING" />
-        <NavbarItem icon={Sparkles} label="AI" target="AI_ADVISOR" />
-        <NavbarItem icon={Settings} label="管理" target="ADMIN" />
-      </nav>
+      <BottomTab />
     </div>
   );
 }

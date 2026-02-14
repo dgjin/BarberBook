@@ -2,7 +2,22 @@
 export enum AppointmentStatus {
   BOOKED = 'BOOKED',
   COMPLETED = 'COMPLETED',
-  CANCELLED = 'CANCELLED'
+  CANCELLED = 'CANCELLED',
+  EXPIRED = 'EXPIRED'
+}
+
+export type UserRole = 'USER' | 'ADMIN';
+
+export interface User {
+  id: string;
+  username: string;
+  password?: string; // Only used for storage/verification
+  name: string;
+  phone: string;
+  role: UserRole;
+  avatarUrl?: string;
+  wechatId?: string; // WeChat OpenID link
+  createdAt: number;
 }
 
 export interface Barber {
@@ -16,10 +31,10 @@ export interface Barber {
 export interface Appointment {
   id: string;
   barberId: string;
-  userId: string; // Ideally from auth, we'll use a local mock ID
-  userName: string; // System username (or fallback)
-  customerName: string; // User entered name
-  customerPhone: string; // User entered phone
+  userId: string; 
+  userName: string; // System username
+  customerName: string; // Display name
+  customerPhone: string;
   date: string; // ISO Date string YYYY-MM-DD
   timeSlot: string; // HH:mm
   status: AppointmentStatus;
@@ -40,4 +55,4 @@ export interface LogEntry {
   timestamp: number;
 }
 
-export type ViewState = 'HOME' | 'BOOKING' | 'MY_APPOINTMENTS' | 'ADMIN' | 'AI_ADVISOR' | 'SCANNER';
+export type ViewState = 'HOME' | 'BOOKING' | 'MY_APPOINTMENTS' | 'ADMIN' | 'AI_ADVISOR' | 'SCANNER' | 'LOGIN' | 'PROFILE';

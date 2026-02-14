@@ -50,7 +50,7 @@ create table public.appointments (
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
--- 4. 创建 Logs 表 (新增)
+-- 4. 创建 Logs 表
 create table public.logs (
   id text primary key,
   action text not null,
@@ -59,6 +59,25 @@ create table public.logs (
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
+-- 5. 创建 Users 表
+create table public.users (
+  id text primary key,
+  username text not null unique,
+  password text, -- 允许为空 (微信登录用户可能没有初始密码)
+  name text,
+  phone text,
+  role text not null default 'USER',
+  "avatarUrl" text,
+  "wechatId" text unique, -- 新增: 微信 OpenID
+  "createdAt" bigint,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- 插入默认管理员 (DB模式)
+insert into public.users (id, username, password, name, phone, role, "createdAt")
+values ('admin_001', 'admin', 'admin123', '系统管理员', '13800000000', 'ADMIN', extract(epoch from now()) * 1000)
+on conflict (username) do nothing;
+
 -- 设置行级安全策略 (RLS)
 -- 注意：为了演示方便，这里允许公开读写。在生产环境中应配置更严格的 Auth 策略。
 
@@ -66,6 +85,7 @@ alter table public.settings enable row level security;
 alter table public.barbers enable row level security;
 alter table public.appointments enable row level security;
 alter table public.logs enable row level security;
+alter table public.users enable row level security;
 
 -- Settings 策略
 create policy "Enable read access for all users" on public.settings for select using (true);
@@ -84,3 +104,8 @@ create policy "Enable update access for all users" on public.appointments for up
 -- Logs 策略
 create policy "Enable read access for all users" on public.logs for select using (true);
 create policy "Enable insert access for all users" on public.logs for insert with check (true);
+
+-- Users 策略
+create policy "Enable read access for all users" on public.users for select using (true);
+create policy "Enable insert access for all users" on public.users for insert with check (true);
+create policy "Enable update access for all users" on public.users for update using (true);
